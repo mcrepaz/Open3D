@@ -378,7 +378,10 @@ class ReconstructionWindow:
     def update_main(self):
         T_frame_to_model = o3c.Tensor(np.identity(4))
 
-        for i in range(2):
+        print("Start time recording...")
+        start_time = time.time()
+
+        for i in range(4):
             self.is_done = False
 
             self.is_started = False
@@ -392,9 +395,9 @@ class ReconstructionWindow:
 
             self.is_running = True
 
-            self.config.path_dataset = 'C:\\Users\\Francesco\\Documents\\lounge_png'
+            self.config.path_dataset = '/home/martin/Desktop/datasets/lounge_png'
 
-            self.config.path_dataset += '_' + str(i+1) + '\\'
+            self.config.path_dataset += '_' + str(i+1) + '/'
             depth_file_names, color_file_names = load_rgbd_file_names(self.config)
             intrinsic = load_intrinsic(self.config)
 
@@ -533,6 +536,11 @@ class ReconstructionWindow:
             # print(f"saved mesh_{i}_{self.idx}.obj")
 
             # time.sleep(0.5)
+
+        print("Stop time recording...")
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"Total time: {total_time:.2f} sec")
 
 
 def process_mesh(mesh, file_name):
