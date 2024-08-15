@@ -21,13 +21,13 @@ import os, sys
 import numpy as np
 import threading
 import time
-from common import load_rgbd_file_names, save_poses, load_intrinsic, extract_trianglemesh, get_default_dataset, \
-    extract_rgbd_frames
+from common import load_rgbd_file_names, save_poses, load_intrinsic, extract_trianglemesh, get_default_dataset, extract_rgbd_frames
 
 import queue
+import socket
 import struct
-
-import pyrealsense2 as rs
+import cv2
+import shutil
 
 
 def set_enabled(widget, enable):
@@ -35,20 +35,17 @@ def set_enabled(widget, enable):
     for child in widget.get_children():
         child.enabled = enable
 
-
 class ReconstructionWindow:
 
     def __init__(self, config, font_id, data_queue):
 
         self._data_queue = data_queue
 
+        self.first_batched_finished = False
+
         self.config = config
 
-        self.pipeline = rs.pipeline()
-        self.config_rs = rs.config()
-        self.config_rs.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 60)
-        self.config_rs.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 60)
-        self.pipeline.start(self.config_rs)
+        self.batch_size = 1000
 
         self.window = gui.Application.instance.create_window(
             'Open3D - Reconstruction', 1280, 800)
@@ -208,11 +205,8 @@ class ReconstructionWindow:
         w.set_on_layout(self._on_layout)
         w.set_on_close(self._on_close)
 
-
-
         # Start running
         threading.Thread(name='UpdateMain', target=self.update_main).start()
-
 
     def _on_layout(self, ctx):
         em = ctx.theme.font_size
@@ -300,6 +294,39 @@ class ReconstructionWindow:
         self.widget3d.setup_camera(60, bbox, [0, 0, 0])
         self.widget3d.look_at([0, 0, 0], [0, -1, -3], [0, -1, 0])
 
+    def receive_intr(self, sock):
+        # Receive data length
+        intrinsic_len = int.from_bytes(sock.recv(4), byteorder='big')
+        intrinsic_data = bytearray()
+        while len(intrinsic_data) < intrinsic_len:
+            packet = sock.recv(intrinsic_len - len(intrinsic_data))
+            if not packet:
+                break
+            intrinsic_data.extend(packet)
+
+            if os.path.exists('config'):
+                shutil.rmtree('config')
+
+            os.makedirs('config')
+
+            with open('config/camera_intrinsic.json', 'wb') as intrinsic_file:
+                intrinsic_file.write(intrinsic_data)
+            print(f"--- Saved camera_intrinsic.json to config/camera_intrinsic.json ---")
+
+        return intrinsic_data
+
+    def receive_image(self, sock):
+        img_size = int.from_bytes(sock.recv(4), byteorder='big')
+
+        img_data = bytearray()
+        while len(img_data) < img_size:
+            packet = sock.recv(img_size - len(img_data))
+            if not packet:
+                break
+            img_data.extend(packet)
+
+        return img_data
+
     def update_render(self, input_depth, input_color, raycast_depth,
                       raycast_color, pcd, frustum):
         self.input_depth_image.update_image(
@@ -320,8 +347,6 @@ class ReconstructionWindow:
                 self.widget3d.scene.scene.update_geometry(
                     'points', pcd, rendering.Scene.UPDATE_POINTS_FLAG |
                                    rendering.Scene.UPDATE_COLORS_FLAG)
-
-
 
         self.widget3d.scene.remove_geometry("frustum")
         mat = rendering.MaterialRecord()
@@ -386,10 +411,20 @@ class ReconstructionWindow:
     def update_main(self):
         T_frame_to_model = o3c.Tensor(np.identity(4))
 
+        image_count_total = 0
+
         print("Start time recording...")
         start_time = time.time()
 
-        for i in range(1):
+        # Set up the TCP socket
+        sock_rec = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock_rec.connect(("192.168.0.245", 55443))
+        print("Connected to server at {}:{}".format("127.0.0.1", 55443))
+
+        for i in range(8):
+
+            print(f"\nBatch #{i} starting...")
+
             self.is_done = False
 
             self.is_started = False
@@ -407,26 +442,42 @@ class ReconstructionWindow:
 
             #self.config.path_dataset += '_' + str(i+1) + '/'
             #depth_file_names, color_file_names = load_rgbd_file_names(self.config)
-            intrinsic = load_intrinsic(self.config)
+
+            if(self.first_batched_finished == False):
+                intrinsic = load_intrinsic(self.config)
+                intrinsic_data = self.receive_intr(sock_rec)
+                file_read_camera_intrinsic = o3d.io.read_pinhole_camera_intrinsic("config/camera_intrinsic.json")
+                print(file_read_camera_intrinsic.intrinsic_matrix)
+                file_intrinsic = o3d.core.Tensor(file_read_camera_intrinsic.intrinsic_matrix,o3d.core.Dtype.Float64)
+                self.first_batched_finished=True
+
+            color_data = self.receive_image(sock_rec)
+            nparrcol = np.frombuffer(color_data, np.uint8)
+            color_image = cv2.imdecode(nparrcol, cv2.IMREAD_COLOR)
+            color_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+
+            depth_data = self.receive_image(sock_rec)
+            nparrdep = np.frombuffer(depth_data, np.uint8)
+            depth_image = cv2.imdecode(nparrdep, cv2.IMREAD_UNCHANGED)
 
             #n_files = len(color_file_names)
             #print(f'n_files {n_files}')
             device = o3d.core.Device(config.device)
 
-            #depth_ref = o3d.t.io.read_image(depth_file_names[0])
-            #color_ref = o3d.t.io.read_image(color_file_names[0])
+            # if depth_data is None or color_data is None:
+            #     print("Failed to receive initial images.")
+            #     return
 
-            # First frame of camera to initalize
-            frames = self.pipeline.wait_for_frames()
-            depth_frame = frames.get_depth_frame()
-            color_frame = frames.get_color_frame()
+            #color_data = np.frombuffer(color_data, dtype=np.uint8)
+            #depth_data = np.frombuffer(depth_data, dtype=np.uint16)
 
-            depth_image = np.asanyarray(depth_frame.get_data())
-            color_image = np.asanyarray(color_frame.get_data())
+            # color_data = np.asanyarray(color_data, dtype=np.uint8)
+            # depth_data = np.asanyarray(depth_data, dtype=np.uint16)
+            # color_data = cv2.imdecode(color_data, cv2.IMREAD_COLOR)
+            # depth_data = depth_data.reshape(640, 480)
 
             depth_ref = o3d.t.geometry.Image(depth_image)
             color_ref = o3d.t.geometry.Image(color_image)
-
 
             input_frame = o3d.t.pipelines.slam.Frame(depth_ref.rows,
                                                      depth_ref.columns, intrinsic,
@@ -444,7 +495,7 @@ class ReconstructionWindow:
             gui.Application.instance.post_to_main_thread(
                 self.window, lambda: self.init_render(depth_ref, color_ref))
 
-            fps_interval_len = 60
+            fps_interval_len = 30
             self.idx = 0
             pcd = None
 
@@ -454,16 +505,38 @@ class ReconstructionWindow:
                     time.sleep(0.05)
                     continue
 
-                #depth = o3d.t.io.read_image(depth_file_names[self.idx]).to(device)
-                #color = o3d.t.io.read_image(color_file_names[self.idx]).to(device)
+                try:
 
-                #Next set of camera frames
-                frames = self.pipeline.wait_for_frames()
-                depth_frame = frames.get_depth_frame()
-                color_frame = frames.get_color_frame()
+                    color_data = self.receive_image(sock_rec)
+                    nparrcol = np.frombuffer(color_data, np.uint8)
+                    color_image = cv2.imdecode(nparrcol, cv2.IMREAD_COLOR)
+                    color_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
 
-                depth_image = np.asanyarray(depth_frame.get_data())
-                color_image = np.asanyarray(color_frame.get_data())
+                    depth_data = self.receive_image(sock_rec)
+                    nparrdep = np.frombuffer(depth_data, np.uint8)
+                    depth_image = cv2.imdecode(nparrdep, cv2.IMREAD_UNCHANGED)
+
+                    image_count_total += 2
+
+                    if image_count_total % 100 == 0 and image_count_total>1:
+                        print(f"{image_count_total} images received\t\tFPS: {(image_count_total/(time.time() - start_time)):,.2f}")
+
+
+                except Exception as e:
+                    print(f"Error: {e.args}")
+                    break
+
+                # if depth_data is None or color_data is None:
+                #     print(f"Failed to receive images at frame {self.idx}.")
+                #     break
+
+                #color_data = np.frombuffer(color_data, dtype=np.uint8)
+                #depth_data = np.frombuffer(depth_data, dtype=np.uint16)
+
+                # color_data = np.asanyarray(color_data, dtype=np.uint8)
+                # depth_data = np.asanyarray(depth_data, dtype=np.uint16)
+                # color_data = cv2.imdecode(color_data, cv2.IMREAD_COLOR)
+                # depth_data = depth_data.reshape(640, 480)
 
                 depth = o3d.t.geometry.Image(depth_image).to(device)
                 color = o3d.t.geometry.Image(color_image).to(device)
@@ -473,7 +546,7 @@ class ReconstructionWindow:
 
                 try:
                     if self.idx > 0:
-                        print(self.idx)
+                        #print(self.idx)
                         result = self.model.track_frame_to_model(
                             input_frame,
                             raycast_frame,
@@ -495,8 +568,8 @@ class ReconstructionWindow:
                         self.raycast_box.checked)
 
                     if (self.idx % self.interval_slider.int_value == 0 and
-                        self.update_box.checked):
-                            #or (self.idx == n_files - 1):
+                        self.update_box.checked) \
+                            or (self.idx == 99):
                         pcd = self.model.voxel_grid.extract_point_cloud(
                             3.0, self.est_point_count_slider.int_value).to(
                             o3d.core.Device('CPU:0'))
@@ -529,7 +602,6 @@ class ReconstructionWindow:
                                                                     elapsed)
 
                     # Output info
-                    #info = 'Frame {}/{}\n\n'.format(self.idx, n_files)
                     info = 'Frame {}\n\n'.format(self.idx)
                     info += 'Transformation:\n{}\n'.format(
                         np.array2string(T_frame_to_model.numpy(),
@@ -556,12 +628,11 @@ class ReconstructionWindow:
                     print(f"Tracking failed at frame {self.idx}: {e}")
 
                 self.idx += 1
-                self.is_done = self.is_done #| (self.idx >= n_files)
+                self.is_done = self.is_done | (self.idx >= self.batch_size)
 
             mesh = self.model.voxel_grid.extract_triangle_mesh(3.0, self.est_point_count_slider.int_value).to(
                 o3d.core.Device('CPU:0'))
             self._data_queue.put(mesh)
-
 
             # mesh = self.model.voxel_grid.extract_triangle_mesh(3.0, self.est_point_count_slider.int_value).to(
             #     o3d.core.Device('CPU:0'))
@@ -574,7 +645,7 @@ class ReconstructionWindow:
         end_time = time.time()
         total_time = end_time - start_time
         print(f"Total time: {total_time:.2f} sec")
-
+        print(f"Number Images: {image_count_total:.2f} sec")
 
 def process_mesh(mesh, file_name):
     triangles = mesh.triangle['indices'].numpy()
