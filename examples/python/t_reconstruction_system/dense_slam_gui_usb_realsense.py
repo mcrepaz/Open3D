@@ -44,10 +44,11 @@ class ReconstructionWindow:
 
         self.config = config
 
+        self.camera_fps = 30
         self.pipeline = rs.pipeline()
         self.config_rs = rs.config()
-        self.config_rs.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 60)
-        self.config_rs.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 60)
+        self.config_rs.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, self.camera_fps)
+        self.config_rs.enable_stream(rs.stream.color, 424, 240, rs.format.rgb8, self.camera_fps)
         self.pipeline.start(self.config_rs)
 
         self.window = gui.Application.instance.create_window(
@@ -411,6 +412,8 @@ class ReconstructionWindow:
 
             #n_files = len(color_file_names)
             #print(f'n_files {n_files}')
+            device_var = config.device
+            print("DEVICE:", device_var)
             device = o3d.core.Device(config.device)
 
             #depth_ref = o3d.t.io.read_image(depth_file_names[0])
@@ -444,7 +447,7 @@ class ReconstructionWindow:
             gui.Application.instance.post_to_main_thread(
                 self.window, lambda: self.init_render(depth_ref, color_ref))
 
-            fps_interval_len = 60
+            fps_interval_len = self.camera_fps
             self.idx = 0
             pcd = None
 
