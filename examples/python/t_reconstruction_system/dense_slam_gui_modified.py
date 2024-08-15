@@ -395,9 +395,10 @@ class ReconstructionWindow:
 
             self.is_running = True
 
-            self.config.path_dataset = '/home/martin/Desktop/datasets/lounge_png'
+            #self.config.path_dataset = '/home/martin/Desktop/datasets/lounge_png'
+            self.config.path_dataset = 'C:\\Users\\macr\\Desktop\\Masterarbeit\\datasets\\lounge_png'
 
-            self.config.path_dataset += '_' + str(i+1) + '/'
+            self.config.path_dataset += '_' + str(i+1) + '\\'
             depth_file_names, color_file_names = load_rgbd_file_names(self.config)
             intrinsic = load_intrinsic(self.config)
 

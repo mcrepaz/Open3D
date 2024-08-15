@@ -95,3 +95,5 @@ docs/tensorboard.md
 examples/python/t_reconstruction_system/realsense*
 examples/python/t_reconstruction_system/dataset*
 examples/python/t_reconstruction_system/output*
+
+output.*
