@@ -108,7 +108,7 @@ class ReconstructionWindow:
         interval_label = gui.Label('Recon. interval')
         self.interval_slider = gui.Slider(gui.Slider.INT)
         self.interval_slider.set_limits(1, 500)
-        self.interval_slider.int_value = 50
+        self.interval_slider.int_value = 30
         self.adjustable_prop_grid.add_child(interval_label)
         self.adjustable_prop_grid.add_child(self.interval_slider)
 
@@ -418,10 +418,10 @@ class ReconstructionWindow:
 
         # Set up the TCP socket
         sock_rec = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock_rec.connect(("192.168.0.245", 55443))
+        sock_rec.connect(("192.168.1.150", 55443))
         print("Connected to server at {}:{}".format("127.0.0.1", 55443))
 
-        for i in range(8):
+        for i in range(1):
 
             print(f"\nBatch #{i} starting...")
 
@@ -459,6 +459,8 @@ class ReconstructionWindow:
             depth_data = self.receive_image(sock_rec)
             nparrdep = np.frombuffer(depth_data, np.uint8)
             depth_image = cv2.imdecode(nparrdep, cv2.IMREAD_UNCHANGED)
+
+            image_count_total += 2
 
             #n_files = len(color_file_names)
             #print(f'n_files {n_files}')
@@ -518,7 +520,7 @@ class ReconstructionWindow:
 
                     image_count_total += 2
 
-                    if image_count_total % 100 == 0 and image_count_total>1:
+                    if image_count_total % 500 == 0 and image_count_total>1:
                         print(f"{image_count_total} images received\t\tFPS: {(image_count_total/(time.time() - start_time)):,.2f}")
 
 
@@ -628,7 +630,8 @@ class ReconstructionWindow:
                     print(f"Tracking failed at frame {self.idx}: {e}")
 
                 self.idx += 1
-                self.is_done = self.is_done | (self.idx >= self.batch_size)
+                #print(self.idx)
+                self.is_done = self.is_done | (self.idx >= (self.batch_size))
 
             mesh = self.model.voxel_grid.extract_triangle_mesh(3.0, self.est_point_count_slider.int_value).to(
                 o3d.core.Device('CPU:0'))
@@ -641,11 +644,13 @@ class ReconstructionWindow:
 
             # time.sleep(0.5)
 
-        print("Stop time recording...")
+        time.sleep(0.5)
+        print("\n--- Stop time recording... ---\n")
         end_time = time.time()
-        total_time = end_time - start_time
-        print(f"Total time: {total_time:.2f} sec")
-        print(f"Number Images: {image_count_total:.2f} sec")
+        elapsed_time = end_time - start_time
+        print(f"Elapsed time:\t\t{elapsed_time:.2f} sec")
+        print(f"Number Frames:\t\t{image_count_total}")
+        print(f"Images per second:\t{(image_count_total/elapsed_time):.2f}\n")
 
 def process_mesh(mesh, file_name):
     triangles = mesh.triangle['indices'].numpy()
